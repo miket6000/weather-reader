@@ -1,0 +1,11 @@
+[Unit]
+Description=Digitech XC0432 weather long-term aggregation (hourly/day blocks)
+After=weather-reader.service
+
+[Service]
+Type=oneshot
+User=weather
+Group=weather
+WorkingDirectory=/opt/weather-reader
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m reader.aggregate --data-dir /var/lib/weather-reader/log --agg-dir /var/lib/weather-reader/aggregates

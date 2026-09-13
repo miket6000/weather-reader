@@ -266,6 +266,64 @@ app.get("/series", (req, res) => {
   res.json(seriesFor(base));
 });
 
+// ---------------------------------------------------------------------------
+// /aggregate: long-term roll-ups (hourly/daily blocks written nightly by
+// reader/aggregate.py). Rows are JSONL per UTC year; cached by mtime+size.
+// ---------------------------------------------------------------------------
+const AGG_DIR = process.env.WEATHER_AGG_DIR || path.join(LOG_DIR, "..", "aggregates");
+const aggCache = new Map(); // abs path -> {mtimeMs, size, rows}
+const AGG_POINT = ["temperature_C", "humidity", "wind_avg_m_s", "wind_gust_m_s",
+                   "rain_mm", "uvi", "wind_dir_deg"];
+
+function aggRows(prefix) {
+  let names = [];
+  try {
+    names = fs.readdirSync(AGG_DIR)
+      .filter((n) => n.startsWith(prefix) && n.endsWith(".jsonl")).sort();
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names) {
+    const p = path.join(AGG_DIR, name);
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    let hit = aggCache.get(p);
+    if (!hit || hit.mtimeMs !== st.mtimeMs || hit.size !== st.size) {
+      const rows = [];
+      for (const line of fs.readFileSync(p, "utf8").split("\n")) {
+        if (!line.trim()) continue;
+        try { rows.push(JSON.parse(line)); } catch { /* skip bad row */ }
+      }
+      hit = { mtimeMs: st.mtimeMs, size: st.size, rows };
+      aggCache.set(p, hit);
+    }
+    for (const r of hit.rows) out.push(r);
+  }
+  return out;
+}
+
+app.get("/aggregate", (req, res) => {
+  const base = ["hour", "day"].includes(req.query.base) ? req.query.base : "day";
+  const now = Date.now() / 1000;
+  const defaultWin = base === "day" ? 6 * 365 * 86400 : 45 * 86400;
+  const from = parseFloat(req.query.from);
+  const to = parseFloat(req.query.to);
+  const f = Number.isFinite(from) ? Math.min(from, now) : now - defaultWin;
+  const t = Number.isFinite(to) ? to : now;
+  let rows = aggRows(base === "day" ? "daily-" : "hourly-")
+    .filter((r) => r.base === base && r.start >= f && r.start <= t)
+    .sort((a, b) => a.start - b.start);
+  const limit = Math.min(parseInt(req.query.limit || "4000", 10) || 4000, 40000);
+  if (rows.length > limit) rows = rows.slice(-limit);
+  const points = rows.map((r) => {
+    const p = { t: r.start, count: r.count };
+    for (const k of AGG_POINT) if (r[k] !== undefined) p[k] = r[k];
+    return p;
+  });
+  res.json({ base, from: f, to: t, points });
+});
+
 app.get("/", (_req, res) => {
   res.type("html").send(indexHtml());
 });
@@ -355,6 +413,7 @@ padding:0 1.2em}
         <button data-b="hour" class="on">Hour</button>
         <button data-b="day">Day</button>
         <button data-b="week">Week</button>
+        <button data-b="years">Years</button>
       </div>
     </div>
     <div class="chartbox">
@@ -369,11 +428,12 @@ MIC-validated frames decoded live on the RTL-SDR. Updates as the station transmi
 <script src="/chart.js"></script>
 <script>
 (function(){
-const BASE = { minute:"Minute", hour:"Hour", day:"Day", week:"Week" };
+const BASE = { minute:"Minute", hour:"Hour", day:"Day", week:"Week", years:"Years" };
 let base = "hour", chart = null;
 const $ = (id) => document.getElementById(id);
 const fmt = (t,b) => {
   const d = new Date(t*1000);
+  if (b==="years") return d.toLocaleDateString(undefined,{year:"numeric",month:"short"});
   if (b==="week") return d.toLocaleDateString(undefined,{month:"short",day:"numeric"});
   if (b==="day") return d.toLocaleString(undefined,{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"});
   return d.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"});
@@ -413,13 +473,20 @@ function renderChart(s){
     yAxisID:yAxisID,
     borderWidth:2,pointRadius:1,pointHitRadius:6,tension:.25,
   });
-  const datasets = [
-    mk("Temperature", "#ef4444", "y", s.points.map(p=>p.temperature_C)),
-    mk("Humidity",    "#3b82f6", "yH", s.points.map(p=>p.humidity)),
-    mk("Wind avg",    "#10b981", "yW", s.points.map(p=>p.wind_avg_m_s)),
-    mk("Wind gust",   "#f59e0b", "yW", s.points.map(p=>p.wind_gust_m_s)),
-    mk("Rain",        "#06b6d4", "yR", s.points.map(p=>p.rain_mm)),
-  ];
+  const datasets = base==="years"
+    ? [
+        mk("Temp min", "#93c5fd", "y", s.points.map(p=>p.temperature_C&&p.temperature_C.min)),
+        mk("Temp avg", "#ef4444", "y", s.points.map(p=>p.temperature_C&&p.temperature_C.avg)),
+        mk("Temp max", "#f59e0b", "y", s.points.map(p=>p.temperature_C&&p.temperature_C.max)),
+        mk("Rain / day", "#06b6d4", "yR", s.points.map(p=>p.rain_mm&&p.rain_mm.sum)),
+      ]
+    : [
+        mk("Temperature", "#ef4444", "y", s.points.map(p=>p.temperature_C)),
+        mk("Humidity",    "#3b82f6", "yH", s.points.map(p=>p.humidity)),
+        mk("Wind avg",    "#10b981", "yW", s.points.map(p=>p.wind_avg_m_s)),
+        mk("Wind gust",   "#f59e0b", "yW", s.points.map(p=>p.wind_gust_m_s)),
+        mk("Rain",        "#06b6d4", "yR", s.points.map(p=>p.rain_mm)),
+      ];
   const opts = {
     responsive:true, maintainAspectRatio:false,
     animation:false,
@@ -457,7 +524,10 @@ function renderChart(s){
   }
 }
 
-async function refresh(){ const [c,s]=await Promise.all([fetch("/current").then(r=>r.json()), fetch("/series?base="+base).then(r=>r.json())]);
+async function refresh(){ const url = base==="years"
+    ? "/aggregate?base=day&from="+(Math.floor(Date.now()/1000)-6*365*86400)
+    : "/series?base="+base;
+  const [c,s]=await Promise.all([fetch("/current").then(r=>r.json()), fetch(url).then(r=>r.json())]);
   renderCurrent(c); renderChart(s);
   $("lastupd").textContent = c.ts ? "last reading " + new Date(c.ts*1000).toLocaleTimeString() : "";
 }

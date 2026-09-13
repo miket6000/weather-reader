@@ -22,13 +22,17 @@ is `null` on rain frames (radiates rtl_433's `DATA_COND, !rain_ok`).
       cli.py        decode a GQRX CF32 recording
       live.py       RTL-SDR -> continuous decode -> JSONL + stdout
       backfill.py   re-derive historical JSONL through the current decoder
-      config.py     config loading (sensor id, wind cap)
+      config.py     config loading (sensor id, wind cap, dir offset)
+      aggregate.py  long-term roll-up: raw -> hourly blocks -> daily blocks
     config.json     end-user configuration (see "Configuration" below)
     service/        Node/Express + WebSocket front end
-      server.js     /, /status, /current, /history, /series, /stream (WS)
+      server.js     /, /status, /current, /history, /series, /aggregate, /stream (WS)
       package.json  express, ws, chart.js (vendored for offline serving)
     log/            readings-YYYYMMDD.jsonl
+    aggregates/     hourly-YYYY.jsonl (rolling ~13 mo), daily-YYYY.jsonl (kept)  [*]
     tests/          unittest suite
+
+[*] written by `reader/aggregate.py` (see "Aggregation" below).
 
 ## Requirements
 
@@ -55,14 +59,15 @@ prints two frames (wind + rain), including temperature 12.2 C and humidity 56 %.
     #        GET http://<host>:8080/status    latest reading
     #        GET http://<host>:8080/history?n=20
     #        GET http://<host>:8080/series?base=minute|hour|day|week   chart data
+    #        GET http://<host>:8080/aggregate?base=hour|day&from=&to=    roll-up data
     #        WS  ws://<host>:8080/stream       live push
 
 The dashboard shows current conditions (latest non-null value for each
 metric) and a history chart of average wind, peak gust, rainfall,
 temperature, and humidity. The time base is switchable between minute
-(raw readings), hour (2-min buckets), day (30-min buckets), and week
-(6-h buckets); rainfall is accumulated per bucket from the sensor's
-running rain counter.
+(raw readings), hour (2-min buckets), day (30-min buckets), week
+(6-h buckets), and years (per-day roll-ups from `aggregates/`);
+rainfall is accumulated per bucket from the sensor's running rain counter.
 
 Configuration for the worker: `-c` receiver center (default 916850000 Hz =
 midpoint of the two tones), `-g` tuner gain, `-s` sample rate (1.8 MS/s),
@@ -108,26 +113,52 @@ first):
 
     python3 -m reader.backfill --log-dir log
 
-For the service: env vars `WEATHER_LOG_DIR`, `WEATHER_CONFIG`, `POLL_MS`;
-the listen port comes from `http_port` in the config file (env `PORT` is only
-a fallback), so it's safe to run `npm start` without setting anything.
+For the service: env vars `WEATHER_LOG_DIR`, `WEATHER_AGG_DIR`,
+`WEATHER_CONFIG`, `POLL_MS`; the listen port comes from `http_port` in the
+config file (env `PORT` is only a fallback), so it's safe to run `npm start`
+without setting anything.
+
+## Aggregation
+
+Raw readings are rolled up so `Years`-long history can be charted without
+the 14-day in-memory store. `reader/aggregate.py` converts a UTC hour into
+one block, then folds finished days (> 365 days old) into day blocks:
+
+    python3 -m reader.aggregate --data-dir log --agg-dir aggregates
+
+Hour blocks keep `min/avg/max` (temperature, humidity, wind avg) plus max
+gust, max UV, accumulated rain, and the prevailing 16-sector wind direction.
+Day blocks are the same shape, counts-weighted, with rain summed per day.
+Blocks are UTC, deterministic, and skipped if already present, so re-running
+is safe (`--rebuild` regenerates hourly blocks from raw; `--dry-run` prints a
+summary). Run it nightly (catch-up over the ~30-day logrotate window):
+
+    systemd timer: deploy/weather-aggregate.timer (00:15, Persistent=true)
+
+Retention: hourly-YYYY.jsonl (~3 MB/yr) is kept until empty as days fold;
+daily-YYYY.jsonl (~90 KB/yr) is kept forever. The dashboard's **Years**
+button reads `GET /aggregate?base=day&from=&to=` (cached per file).
 
 ## Tests
 
-    python3 -m unittest tests.test_decode
+    python3 -m unittest discover -s tests
 
 Coverage: reference message MIC + fields, bit-flip rejection, LFSR/digest
-port, sync-pattern rejection of garbage, noise/silence rejection, and both
-frames from the recorded file (timing ~12 s apart, fields match rtl_433).
+port, sync-pattern rejection of garbage, noise/silence rejection, both
+frames from the recorded file (timing ~12 s apart, fields match rtl_433),
+config precedence, and the aggregator (hour stats, rain deltas, incomplete
+hours, idempotency, day folding, rebuild, gzipped raw input).
 
 ## Deployment (Debian server / Pi)
 
 The units in `deploy/` target a FHS-style layout:
 
     /opt/weather-reader                code (root-owned, read-only)
-    /etc/weather-reader/config.json    settings (edit: sensor_id, max_wind_m_s, dir_offset)
+    /etc/weather-reader/config.json    settings (edit: sensor_id, max_wind_m_s, dir_offset, http_port)
     /var/lib/weather-reader/log        readings-YYYYMMDD.jsonl
+    /var/lib/weather-reader/aggregates hourly-YYYY / daily-YYYY.jsonl
     systemd: weather-reader, weather-http  (run as unprivileged user `weather`)
+             weather-aggregate.service + .timer (nightly roll-up)
 
 On the target server (dongle plugged in, RTL-SDR already working):
 
@@ -136,9 +167,10 @@ On the target server (dongle plugged in, RTL-SDR already working):
 
 `deploy/install.sh` is idempotent: installs apt deps (python3-numpy, nodejs,
 npm, rtl-sdr), blacklists the DVB-T driver, creates the `weather` user and
-log dir, seeds `/etc/weather-reader/config.json` if absent, runs
-`npm ci`, installs a udev rule for the RTL2832U, enables the two systemd
-units, and adds a logrotate snippet.
+log and aggregates dirs, seeds `/etc/weather-reader/config.json` if absent,
+runs `npm ci`, installs a udev rule for the RTL2832U, enables the systemd
+units plus the aggregate timer, kicks one aggregation run so the dashboard
+shows data immediately, and adds a logrotate snippet (`log` raw: 30 days).
 
 Updates later:
 

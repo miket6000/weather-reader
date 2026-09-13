@@ -11,12 +11,14 @@
 #     /opt/weather-reader            code (root-owned, read-only)
 #     /etc/weather-reader/config.json  settings (edit these)
 #     /var/lib/weather-reader/log    readings-YYYYMMDD.jsonl data
-#     systemd: weather-reader, weather-http (run as 'weather')
+#     /var/lib/weather-reader/aggregates  hourly-YYYY / daily-YYYY.jsonl
+#     systemd: weather-reader, weather-http (run as 'weather') + weather-aggregate.timer
 #
 set -euo pipefail
 
 REPO=${REPO:-/opt/weather-reader}
 LOG_DIR=${LOG_DIR:-/var/lib/weather-reader/log}
+AGG_DIR=${AGG_DIR:-/var/lib/weather-reader/aggregates}
 ETC=/etc/weather-reader
 CFG=/etc/weather-reader/config.json
 SVC_USER=weather
@@ -54,6 +56,7 @@ if ! id -u $SVC_USER >/dev/null 2>&1; then
           --shell /usr/sbin/nologin $SVC_USER
 fi
 install -d -o $SVC_USER -g $SVC_USER -m 0755 $LOG_DIR
+install -d -o $SVC_USER -g $SVC_USER -m 0755 $AGG_DIR
 
 echo "==> seeding config ($CFG) if absent"
 install -d -m 0755 $ETC
@@ -81,10 +84,14 @@ udevadm trigger --subsystem-match=usb 2>/dev/null || true
 
 echo "==> installing systemd units"
 install -m 0644 $REPO/deploy/weather-reader.service \
-                 $REPO/deploy/weather-http.service /etc/systemd/system/
+                 $REPO/deploy/weather-http.service \
+                 $REPO/deploy/weather-aggregate.service \
+                 $REPO/deploy/weather-aggregate.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now weather-http weather-reader
+systemctl enable --now weather-http weather-reader weather-aggregate.timer
 systemctl restart weather-http weather-reader 2>/dev/null || true
+echo "==> one-shot aggregate so the dashboard has data immediately"
+systemctl start weather-aggregate.service || true
 
 echo "==> installing logrotate"
 install -m 0644 /dev/stdin /etc/logrotate.d/weather-reader <<EOF
@@ -101,8 +108,9 @@ EOF
 echo
 echo "==> done. Verify:"
 echo "    rtl_test -t                      # dongle visible + not held by DVB driver"
-echo "    systemctl status weather-reader weather-http"
+echo "    systemctl status weather-reader weather-http weather-aggregate.timer"
 echo "    journalctl -u weather-reader -e"
 echo "    curl -s http://<host>:8080/current"
-echo "    curl -s http://<host>:8080/  (dashboard)"
+echo "    curl -s http://<host>:8080/  (dashboard, \"Years\" button needs data >1 day)"
+echo "    curl -s http://<host>:8080/aggregate?base=day  (roll-up rows)"
 echo "    # if your station id differs: edit $CFG then: systemctl restart weather-reader"

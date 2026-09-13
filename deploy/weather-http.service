@@ -8,6 +8,7 @@ User=weather
 Group=weather
 WorkingDirectory=/opt/weather-reader/service
 Environment=WEATHER_LOG_DIR=/var/lib/weather-reader/log
+Environment=WEATHER_AGG_DIR=/var/lib/weather-reader/aggregates
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5
