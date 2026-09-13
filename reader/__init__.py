@@ -1,0 +1,1 @@
+"""Digitech XC0432 / Bresser 6-in-1 weather station reader."""

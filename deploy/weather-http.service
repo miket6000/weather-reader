@@ -1,0 +1,17 @@
+[Unit]
+Description=Digitech XC0432 weather reader HTTP/WebSocket front end
+After=network.target
+
+[Service]
+Type=simple
+User=weather
+Group=weather
+WorkingDirectory=/opt/weather-reader/service
+Environment=WEATHER_LOG_DIR=/var/lib/weather-reader/log
+Environment=PORT=8080
+ExecStart=/usr/bin/node server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

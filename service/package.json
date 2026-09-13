@@ -1,0 +1,15 @@
+{
+  "name": "weather-reader-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HTTP/WebSocket front-end for the Digitech XC0432 weather reader",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "chart.js": "^4.5.1",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

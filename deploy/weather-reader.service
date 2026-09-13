@@ -1,0 +1,16 @@
+[Unit]
+Description=Digitech XC0432 weather reader (RTL-SDR decode worker)
+After=network.target weather-http.service
+
+[Service]
+Type=simple
+User=weather
+Group=weather
+WorkingDirectory=/opt/weather-reader
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m reader.live -c 916850000 -g 30 -d /var/lib/weather-reader/log --config /etc/weather-reader/config.json
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

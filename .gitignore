@@ -1,0 +1,11 @@
+# data / state
+log/
+*.bak
+*.tmp
+
+# runtime deps (installed via `npm ci` on the target host)
+service/node_modules/
+
+# python
+__pycache__/
+*.pyc
