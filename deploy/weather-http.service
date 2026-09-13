@@ -8,7 +8,6 @@ User=weather
 Group=weather
 WorkingDirectory=/opt/weather-reader/service
 Environment=WEATHER_LOG_DIR=/var/lib/weather-reader/log
-Environment=PORT=8080
 ExecStart=/usr/bin/node server.js
 Restart=on-failure
 RestartSec=5

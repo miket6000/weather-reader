@@ -90,6 +90,10 @@ and `cli.py` read:
 - `dir_offset` — wind-direction correction in degrees (-360 to +360), added
   to every reading and wrapped into 0..360. Use it to compensate for a wind
   vane that isn't mounted with its "N" mark pointing exactly north.
+- `http_port` — the port the HTTP/WebSocket front end listens on. Pick a free
+  one if 8080 collides with anything else on the box, then
+  `systemctl restart weather-http`. (The HTTP service falls back to the
+  `PORT` env var, then 8080.)
 
 Precedence is CLI flag > config file > built-in default. `live.py` and
 `cli.py` accept `--sensor-id` (empty string = accept any), `--max-wind`,
@@ -104,7 +108,9 @@ first):
 
     python3 -m reader.backfill --log-dir log
 
-For the service: env vars `WEATHER_LOG_DIR`, `PORT`, `POLL_MS`.
+For the service: env vars `WEATHER_LOG_DIR`, `WEATHER_CONFIG`, `POLL_MS`;
+the listen port comes from `http_port` in the config file (env `PORT` is only
+a fallback), so it's safe to run `npm start` without setting anything.
 
 ## Tests
 

@@ -7,9 +7,40 @@ const express = require("express");
 const { WebSocketServer } = require("ws");
 
 const LOG_DIR = process.env.WEATHER_LOG_DIR || path.join(__dirname, "..", "log");
-const PORT = parseInt(process.env.PORT || "8080", 10);
 const POLL_MS = parseInt(process.env.POLL_MS || "1000", 10);
 const STORE_MAX_AGE_S = 14 * 86400; // keep 14 days of history in memory
+
+// ---- config (shared /etc/weather-reader/config.json, else project one) -----
+const CONF_CANDIDATES = [
+  process.env.WEATHER_CONFIG,
+  "/etc/weather-reader/config.json",
+  path.join(__dirname, "..", "config.json"),
+].filter(Boolean);
+
+function loadConf() {
+  for (const p of CONF_CANDIDATES) {
+    try {
+      return JSON.parse(fs.readFileSync(p, "utf8"));
+    } catch { /* try next */ }
+  }
+  return {};
+}
+
+const CONF = loadConf();
+
+function resolvePort() {
+  const fromConfig = Number(CONF.http_port);
+  const fromEnv = parseInt(process.env.PORT || "", 10);
+  const port = Number.isInteger(fromConfig) ? fromConfig
+               : Number.isInteger(fromEnv) ? fromEnv
+               : 8080;
+  if (port < 1 || port > 65535) {
+    console.error(`weather-http: invalid port ${port}; using 8080`);
+    return 8080;
+  }
+  return port;
+}
+const PORT = resolvePort();
 
 // ---- history store -----------------------------------------------------------
 let store = [];            // readings flat, newest at the end

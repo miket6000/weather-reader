@@ -1,5 +1,6 @@
 {
     "sensor_id": "9fd70875",
     "max_wind_m_s": 60.0,
-    "dir_offset": 0.0
+    "dir_offset": 0.0,
+    "http_port": 8080
 }

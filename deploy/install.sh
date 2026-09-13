@@ -84,6 +84,7 @@ install -m 0644 $REPO/deploy/weather-reader.service \
                  $REPO/deploy/weather-http.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now weather-http weather-reader
+systemctl restart weather-http weather-reader 2>/dev/null || true
 
 echo "==> installing logrotate"
 install -m 0644 /dev/stdin /etc/logrotate.d/weather-reader <<EOF
