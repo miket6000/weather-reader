@@ -169,6 +169,67 @@ function currentConditions() {
   };
 }
 
+const SECTORS = 16;
+
+function windowStats(windowS) {
+  const now = Date.now() / 1000;
+  const cur = currentConditions();
+  const win = store.filter((r) => r.ts >= now - windowS);
+
+  const hla = (field) => {
+    let mn = null, mx = null, sum = 0, n = 0;
+    for (const r of win) {
+      const v = r[field];
+      if (v === null || v === undefined) continue;
+      if (mn === null || v < mn) mn = v;
+      if (mx === null || v > mx) mx = v;
+      sum += v; n += 1;
+    }
+    return n
+      ? { min: mn, avg: Math.round((sum / n) * 100) / 100, max: mx }
+      : { min: null, avg: null, max: null };
+  };
+
+  let rainRef = null, rainSum = 0;
+  for (const r of win) {
+    if (r.rain_ok && r.rain_mm !== null && r.rain_mm !== undefined) {
+      if (rainRef !== null) {
+        const d = r.rain_mm - rainRef;
+        if (d >= 0 && d < 1000) rainSum += d;
+      }
+      rainRef = r.rain_mm;
+    }
+  }
+
+  const dirs = new Array(SECTORS).fill(0);
+  for (const r of win) {
+    const d = r.wind_dir_deg;
+    if (d !== null && d !== undefined) {
+      dirs[Math.round((((d % 360) + 360) % 360) / 22.5) % SECTORS] += 1;
+    }
+  }
+  let mode = null;
+  let best = 0;
+  for (let i = 1; i < SECTORS; i++) if (dirs[i] > dirs[best]) best = i;
+  if (dirs[best]) mode = Math.round(best * 22.5) % 360;
+
+  return {
+    window_s: windowS,
+    readings: win.length,
+    since: now - windowS,
+    metrics: {
+      temperature_C: { cur: cur.temperature_C, ...hla("temperature_C") },
+      humidity: { cur: cur.humidity, ...hla("humidity") },
+      wind_avg_m_s: { cur: cur.wind_avg_m_s, ...hla("wind_avg_m_s") },
+      wind_gust_m_s: { cur: cur.wind_gust_m_s, ...hla("wind_gust_m_s") },
+      uvi: { cur: cur.uvi, ...hla("uvi") },
+      rain_mm: { cur: cur.rain_mm, total: Math.round(rainSum * 100) / 100 },
+      wind_dir_deg: { cur: cur.wind_dir_deg, mode },
+      battery_ok: { cur: cur.battery_ok },
+    },
+  };
+}
+
 function seriesFor(base) {
   const win = WINDOWS[base] || WINDOWS.hour;
   const bucket = base in BUCKETS ? BUCKETS[base] : BUCKETS.hour;
@@ -252,6 +313,12 @@ app.get("/chart.js", (_req, res) => {
 });
 
 app.get("/current", (_req, res) => res.json(currentConditions()));
+
+app.get("/stats", (req, res) => {
+  const w = parseInt(req.query.window || "86400", 10);
+  const windowS = Number.isInteger(w) && w > 0 ? Math.min(w, 14 * 86400) : 86400;
+  res.json(windowStats(windowS));
+});
 
 app.get("/status", (_req, res) => res.json(lastReading || null));
 
@@ -362,15 +429,28 @@ align-items:baseline;gap:.8em;flex-wrap:wrap}
 header h1{font-size:1.05rem;margin:0;font-weight:600}
 header .sub{color:#94a3b8;font-size:.8rem}
 main{max-width:1100px;margin:0 auto;padding:1.2em}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+.cards{display:grid;grid-template-columns:repeat(4,1fr);
 gap:.8em;margin-bottom:1em}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
-padding:.8em .9em;box-shadow:0 1px 2px rgba(15,23,42,.06)}
-.card .k{color:var(--mut);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
-.card .v{font-size:1.55rem;font-weight:650;margin-top:.15em;line-height:1.1;
+padding:.75em .9em;box-shadow:0 1px 2px rgba(15,23,42,.06);
+display:flex;flex-direction:column;min-height:122px}
+.card .k{color:var(--mut);font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;
 white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.card .u{font-size:.8rem;color:var(--mut);font-weight:500}
-.card .n{padding:.9em;color:var(--mut);font-weight:400}
+.card .v{font-size:1.5rem;font-weight:650;margin-top:.18em;line-height:1.15;
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card .v.n{color:var(--mut);font-weight:400}
+.card .s{display:grid;grid-template-columns:repeat(3,1fr);gap:.15em .4em;
+border-top:1px solid var(--line);margin-top:auto;padding-top:.5em}
+.card .s .sn{display:flex;flex-direction:column;line-height:1.25;
+min-width:0;overflow:hidden;text-overflow:ellipsis}
+.card .s .sn i{font-style:normal;font-size:.62rem;text-transform:uppercase;
+letter-spacing:.05em;color:var(--mut)}
+.card .s .sn b{font-weight:600;font-size:.88rem;white-space:nowrap;
+overflow:hidden;text-overflow:ellipsis}
+.card .s .wide{grid-column:1/-1;flex-direction:row;align-items:baseline;
+justify-content:center;gap:.45em}
+.card .s .wide b{font-size:1rem}
+.lowb{color:var(--gust)}
 .temp{color:var(--temp)} .hum{color:var(--hum)} .wind{color:var(--wind)}
 .gust{color:var(--gust)} .rain{color:var(--rain)}
 .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;
@@ -382,6 +462,8 @@ gap:1em;margin-bottom:.8em;flex-wrap:wrap}
 .seg button{border:0;background:transparent;padding:.4em .95em;cursor:pointer;
 font:inherit;color:var(--ink)}
 .seg button.on{background:#0f172a;color:#fff}
+@media (max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:560px){.cards{grid-template-columns:1fr}}
 .chartbox{position:relative;height:360px}
 #chartjs-note{position:absolute;inset:0;display:none;align-items:center;
 justify-content:center;color:var(--mut);text-align:center;padding:1em}
@@ -394,16 +476,7 @@ padding:0 1.2em}
 <header><h1>Digitech XC0432 / Bresser 6-in-1</h1>
 <span class="sub" id="hdrId"></span></header>
 <main>
-  <section class="cards" id="cards">
-    <div class="card"><div class="k">Temperature</div><div class="v temp" id="cTemp">&ndash;</div></div>
-    <div class="card"><div class="k">Humidity</div><div class="v hum" id="cHum">&ndash;</div></div>
-    <div class="card"><div class="k">Wind</div><div class="v wind" id="cWind">&ndash;</div></div>
-    <div class="card"><div class="k">Gust</div><div class="v gust" id="cGust">&ndash;</div></div>
-    <div class="card"><div class="k">Direction</div><div class="v" id="cDir">&ndash;</div><div class="u" id="cDirU"></div></div>
-    <div class="card"><div class="k">Rain (acc.)</div><div class="v rain" id="cRain">&ndash;</div></div>
-    <div class="card"><div class="k">UV Index</div><div class="v" id="cUV">&ndash;</div></div>
-    <div class="card"><div class="k">Battery</div><div class="v" id="cBat">&ndash;</div></div>
-  </section>
+  <section class="cards" id="cards"></section>
 
   <section class="panel">
     <div class="toolbar">
@@ -443,24 +516,77 @@ const compass = (deg) => {
   const dirs=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
   return dirs[Math.round(((deg%360)+360)%360/22.5)%16];
 };
-function card(id,val){ const el=$(id); if(val==null||val===""){el.textContent="\u2013";el.classList.add("n");}else{el.textContent=val;el.classList.remove("n");} }
+const METRIC = {
+  temperature_C: { k:"Temperature", cls:"temp",
+    v:m=>m&&m.cur!=null?m.cur.toFixed(1)+"\u00b0":null,
+    s:m=>m?[["min",m.min!=null?m.min.toFixed(1)+"\u00b0":null],
+             ["avg",m.avg!=null?m.avg.toFixed(1)+"\u00b0":null],
+             ["max",m.max!=null?m.max.toFixed(1)+"\u00b0":null]]:null },
+  humidity: { k:"Humidity", cls:"hum",
+    v:m=>m&&m.cur!=null?m.cur+"%":null,
+    s:m=>m?[["min",m.min!=null?m.min+"%":null],
+             ["avg",m.avg!=null?m.avg+"%":null],
+             ["max",m.max!=null?m.max+"%":null]]:null },
+  wind_avg_m_s: { k:"Wind", cls:"wind",
+    v:m=>m&&m.cur!=null?m.cur.toFixed(1)+" m/s":null,
+    s:m=>m?[["min",m.min!=null?m.min.toFixed(1)+" m/s":null],
+             ["avg",m.avg!=null?m.avg.toFixed(1)+" m/s":null],
+             ["max",m.max!=null?m.max.toFixed(1)+" m/s":null]]:null },
+  wind_gust_m_s: { k:"Gust", cls:"gust",
+    v:m=>m&&m.cur!=null?m.cur.toFixed(1)+" m/s":null,
+    s:m=>m?[["min",m.min!=null?m.min.toFixed(1)+" m/s":null],
+             ["avg",m.avg!=null?m.avg.toFixed(1)+" m/s":null],
+             ["max",m.max!=null?m.max.toFixed(1)+" m/s":null]]:null },
+  uvi: { k:"UV Index",
+    v:m=>m&&m.cur!=null?m.cur.toFixed(1):null,
+    s:m=>m?[["min",m.min!=null?m.min.toFixed(1):null],
+             ["avg",m.avg!=null?m.avg.toFixed(1):null],
+             ["max",m.max!=null?m.max.toFixed(1):null]]:null },
+  rain_mm: { k:"Rain (acc.)", cls:"rain",
+    v:m=>m&&m.cur!=null?m.cur.toFixed(1)+" mm":null,
+    s:m=>m&&m.total!=null?[["24h total",m.total.toFixed(1)+" mm"]]:null, wide:true },
+  wind_dir_deg: { k:"Direction",
+    v:m=>m&&m.cur!=null?(compass(m.cur)!==null?compass(m.cur)+" \u00b7 "+m.cur+"\u00b0":null):null,
+    s:m=>m&&m.mode!=null?[["24h prevailing",compass(m.mode)+" \u00b7 "+m.mode+"\u00b0"]]:null,
+    wide:true },
+  battery_ok: { k:"Battery",
+    v:m=>m==null||m.cur==null?null:(m.cur?"OK":"LOW"),
+    s:()=>[["state","no 24h range"]], wide:true, bat:true },
+};
 
 function renderCurrent(c){
-  if (!c || c.ts==null) { $("hdrId").textContent="no readings yet"; return; }
-  $("hdrId").textContent = c.model + " \u00b7 id " + (c.id||"?");
-  card("cTemp", c.temperature_C!=null ? c.temperature_C.toFixed(1)+"\u00b0" : null);
-  card("cHum",  c.humidity!=null ? c.humidity+"%" : null);
-  card("cWind", c.wind_avg_m_s!=null ? c.wind_avg_m_s.toFixed(1)+" m/s" : null);
-  card("cGust", c.wind_gust_m_s!=null ? c.wind_gust_m_s.toFixed(1)+" m/s" : null);
-  const dir = compass(c.wind_dir_deg);
-  card("cDir", dir);
-  const du = $("cDirU");
-  if (du) du.textContent = (dir && c.wind_dir_deg != null) ? c.wind_dir_deg + "\u00b0" : "";
-  card("cRain", c.rain_mm!=null ? c.rain_mm.toFixed(1)+" mm" : null);
-  card("cUV",   c.uvi!=null ? c.uvi.toFixed(1) : null);
-  const bat = c.battery_ok;
-  card("cBat",  bat==null ? null : (bat ? "OK" : "LOW"));
-  $("cBat").style.color = bat === false ? "var(--gust)" : "var(--wind)";
+  $("hdrId").textContent = (c && c.ts!=null)
+    ? c.model + " \u00b7 id " + (c.id||"?")
+    : "no readings yet";
+}
+
+function renderCards(st){
+  if (!st) return;
+  const dash = "\u2013";
+  let html = "";
+  for (const key in METRIC) {
+    const def = METRIC[key], m = (st.metrics||{})[key];
+    let v = def.v(m);
+    if (v===null||v==="") v = dash;
+    let row = "";
+    const cells = def.s ? def.s(m) : null;
+    if (cells && cells.length) {
+      const spans = [];
+      for (const c of cells) {
+        let b = c[1];
+        if (b===null||b==="") b = dash;
+        const low = (def.bat && c[1]==="LOW") ? ' class="lowb"' : "";
+        spans.push('<span class="sn' + (def.wide?" wide":"") + '"><i>' + c[0]
+          + "</i><b" + low + ">" + b + "</b></span>");
+      }
+      row = '<div class="s">' + spans.join("") + "</div>";
+    }
+    html += '<div class="card"><div class="k">' + def.k + "</div>"
+      + '<div class="v ' + (def.cls||"") + (v===dash?" n":"")
+      + (def.bat&&v==="LOW"?" lowb":"") + '">' + v
+      + "</div>" + row + "</div>";
+  }
+  $("cards").innerHTML = html;
 }
 
 function renderChart(s){
@@ -527,8 +653,9 @@ function renderChart(s){
 async function refresh(){ const url = base==="years"
     ? "/aggregate?base=day&from="+(Math.floor(Date.now()/1000)-6*365*86400)
     : "/series?base="+base;
-  const [c,s]=await Promise.all([fetch("/current").then(r=>r.json()), fetch(url).then(r=>r.json())]);
-  renderCurrent(c); renderChart(s);
+  const [c,s,st]=await Promise.all([fetch("/current").then(r=>r.json()),
+    fetch(url).then(r=>r.json()), fetch("/stats").then(r=>r.json())]);
+  renderCurrent(c); renderCards(st); renderChart(s);
   $("lastupd").textContent = c.ts ? "last reading " + new Date(c.ts*1000).toLocaleTimeString() : "";
 }
 let timer=null;

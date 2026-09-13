@@ -56,6 +56,7 @@ prints two frames (wind + rain), including temperature 12.2 C and humidity 56 %.
     cd service && npm install && npm start
     # then:  GET http://<host>:8080/          dashboard (current conditions + history)
     #        GET http://<host>:8080/current   latest non-null value per metric
+    #        GET http://<host>:8080/stats?window=86400   current + 24h min/avg/max per metric
     #        GET http://<host>:8080/status    latest reading
     #        GET http://<host>:8080/history?n=20
     #        GET http://<host>:8080/series?base=minute|hour|day|week   chart data
