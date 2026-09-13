@@ -82,7 +82,9 @@ and `cli.py` read:
     {
         "sensor_id": "9fd70875",
         "max_wind_m_s": 60.0,
-        "dir_offset": 0.0
+        "dir_offset": 0.0,
+        "http_port": 8080,
+        "chart_min_spread": { "temperature": 5, "humidity": 20, "wind": 2, "rain": 0 }
     }
 
 - `sensor_id` — only frames from this transmitter are logged. Set it to your
@@ -100,6 +102,16 @@ and `cli.py` read:
   one if 8080 collides with anything else on the box, then
   `systemctl restart weather-http`. (The HTTP service falls back to the
   `PORT` env var, then 8080.)
+- `chart_min_spread` — the minimum vertical range each chart axis must show,
+  keyed by metric name: `temperature` → `y`, `humidity` → `yH`, `wind`
+  (avg+gust share the axis) → `yW`, `rain` → `yR`. When the data in view is
+  narrower than the spread, the axis is expanded around the data's midpoint
+  and rounded out to a clean tick boundary; wider data is left alone. `0`
+  disables the constraint for that axis (default for rain, whose axis already
+  starts at zero). A bare number instead of an object (e.g. `"chart_min_spread": 8`)
+  applies to temperature only. Example: temperature hovering between 15.0 and
+  15.5 °C will still be charted across ~12.5-18 °C, giving stable, readable
+  axes instead of zooming in on tiny fluctuations.
 
 Precedence is CLI flag > config file > built-in default. `live.py` and
 `cli.py` accept `--sensor-id` (empty string = accept any), `--max-wind`,

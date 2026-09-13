@@ -42,6 +42,31 @@ function resolvePort() {
 }
 const PORT = resolvePort();
 
+// minimum vertical spread per chart axis (see README "chart_min_spread")
+const SPREAD_DEFAULTS = { y: 5, yH: 20, yW: 2, yR: 0 };
+const SPREAD_METRIC = { temperature: "y", humidity: "yH", wind: "yW", rain: "yR" };
+
+function resolveMinSpread() {
+  const out = { ...SPREAD_DEFAULTS };
+  const cfg = CONF.chart_min_spread;
+  if (cfg === undefined || cfg === null) return out;
+  const num = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? n : undefined;
+  };
+  if (typeof cfg === "number" || typeof cfg === "string") {
+    const v = num(cfg);
+    if (v !== undefined) out.y = v; // bare value = temperature only
+  } else if (typeof cfg === "object") {
+    for (const metric of Object.keys(SPREAD_METRIC)) {
+      const v = num(cfg[metric]);
+      if (v !== undefined) out[SPREAD_METRIC[metric]] = v;
+    }
+  }
+  return out;
+}
+const MIN_SPREAD = resolveMinSpread();
+
 // ---- history store -----------------------------------------------------------
 let store = [];            // readings flat, newest at the end
 let lastReading = null;
@@ -502,6 +527,7 @@ MIC-validated frames decoded live on the RTL-SDR. Updates as the station transmi
 <script>
 (function(){
 const BASE = { minute:"Minute", hour:"Hour", day:"Day", week:"Week", years:"Years" };
+const MIN_SPREAD = ${JSON.stringify(MIN_SPREAD)};
 let base = "hour", chart = null;
 const $ = (id) => document.getElementById(id);
 const fmt = (t,b) => {
@@ -613,6 +639,34 @@ function renderChart(s){
         mk("Wind gust",   "#f59e0b", "yW", s.points.map(p=>p.wind_gust_m_s)),
         mk("Rain",        "#06b6d4", "yR", s.points.map(p=>p.rain_mm)),
       ];
+  const niceGran = (t) => {
+    for (const g of [0.5, 1, 2, 5, 10, 25, 50, 100, 200, 500]) {
+      if (g * 10 >= t) return g;
+    }
+    return 1000;
+  };
+  const scaleLimits = {};
+  for (const axis of ["y", "yH", "yW", "yR"]) {
+    const spread = (MIN_SPREAD||{})[axis];
+    if (!spread) continue;
+    let mn = null, mx = null;
+    for (const d of datasets) {
+      if (d.yAxisID !== axis || !d.data) continue;
+      for (const v of d.data) {
+        if (v === null || v === undefined) continue;
+        if (mn === null || v < mn) mn = v;
+        if (mx === null || v > mx) mx = v;
+      }
+    }
+    if (mn === null || mx - mn >= spread) continue;
+    const center = (mn + mx) / 2;
+    const gran = niceGran(spread);
+    const lo = Math.floor((center - spread / 2) / gran) * gran;
+    const hi = Math.ceil((center + spread / 2) / gran) * gran;
+    scaleLimits[axis] = axis === "yR"
+      ? { min: 0, max: Math.max(hi, spread) }
+      : { min: lo, max: hi };
+  }
   const opts = {
     responsive:true, maintainAspectRatio:false,
     animation:false,
@@ -640,6 +694,10 @@ function renderChart(s){
           grid:{drawOnChartArea:false},beginAtZero:true},
     },
   };
+  for (const a in scaleLimits) {
+    opts.scales[a].min = scaleLimits[a].min;
+    opts.scales[a].max = scaleLimits[a].max;
+  }
   if (!chart) {
     chart = new Chart($("chart").getContext("2d"), {type:"line",data:{labels,datasets},options:opts});
   } else {
