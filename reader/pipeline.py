@@ -6,6 +6,7 @@ import time
 from .dsp import (
     Cfg,
     decode_burst,
+    estimate_offset,
     find_bursts,
     shift_to_virtual_center,
     soft_metric,
@@ -15,16 +16,26 @@ from .frames import parse_msg
 
 def decode_iq(iq, fs=1.8e6, shift_hz=0.0, tone_khz=60.0, sym_us=124.0,
               cfg=None, seg_s=4.0, overlap_s=0.5, sensor_id=None,
-              max_wind_m_s=60.0, dir_offset=0.0):
+              max_wind_m_s=60.0, dir_offset=0.0, afc_hz=0.0,
+              afc_max_hz=0.0, afc_alpha=0.2, afc_search_khz=None):
     """Decode all valid frames from a raw complex IQ array.
 
     Returns list of records (already JSON-serializable). Processes the IQ in
     time windows to bound memory/CPU on long dumps. If `sensor_id` is given,
     frames from any other transmitter are dropped. `dir_offset` is a vane
     correction in degrees applied to every direction.
+
+    `shift_hz` applies a fixed frequency correction to the whole array (the
+    offline "virtual center minus sample center"). When `afc_max_hz` > 0 an
+    automatic frequency correction loop is enabled: each window's tone-pair
+    offset is estimated and smoothed into `afc_hz`, which is applied by
+    shifting the window before demodulating (see estimate_offset).
     """
     cfg = cfg or Cfg(fs=fs, tone_khz=tone_khz, sym_us=sym_us)
     iq = shift_to_virtual_center(iq, fs, shift_hz)
+    afc = float(afc_hz)
+    afc_max = float(afc_max_hz)
+    search_khz = afc_search_khz if afc_search_khz is not None else afc_max / 1e3
     n = len(iq)
     hop = int((seg_s - overlap_s) * fs)
     seg = int(seg_s * fs)
@@ -33,7 +44,8 @@ def decode_iq(iq, fs=1.8e6, shift_hz=0.0, tone_khz=60.0, sym_us=124.0,
     while t0 < n:
         i0 = int(t0)
         i1 = min(n, i0 + seg)
-        soft, energy = soft_metric(iq[i0:i1], cfg)
+        window = shift_to_virtual_center(iq[i0:i1], fs, afc)
+        soft, energy = soft_metric(window, cfg)
         base_t = i0 / fs
         bursts = find_bursts(soft, energy, fs)
         for (s0, s1) in bursts:
@@ -42,6 +54,12 @@ def decode_iq(iq, fs=1.8e6, shift_hz=0.0, tone_khz=60.0, sym_us=124.0,
                                 max_wind_m_s=max_wind_m_s,
                                 dir_offset=dir_offset)
             records.extend(r for r in recs if r["mic_ok"])
+        if afc_max > 0:
+            meas = estimate_offset(iq[i0:i1], fs, tone_khz=tone_khz,
+                                   search_khz=search_khz)
+            if meas is not None:
+                clamped = max(-afc_max, min(afc_max, meas))
+                afc = afc + afc_alpha * (clamped - afc)
         if i1 >= n:
             break
         t0 += hop

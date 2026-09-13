@@ -10,6 +10,7 @@ import json
 import sys
 
 from .config import apply_cli_overrides, load_config
+from .dsp import estimate_offset, shift_to_virtual_center
 from .pipeline import read_cf32, decode_iq
 
 
@@ -33,13 +34,40 @@ def main(argv=None):
     ap.add_argument("--dir-offset", type=float, default=None,
                     help="wind-direction correction in degrees, -360..+360 "
                          "(default from config)")
+    ap.add_argument("--afc", action="store_true",
+                    help="measure the tone-mid offset and auto-correct the "
+                         "recording (residual drift after -T/-c shift)")
+    ap.add_argument("--afc-search-khz", type=float, default=None,
+                    help="tone search half-width in kHz for the AFC offset "
+                         "probe (default: afc max from config, 40)")
     args = ap.parse_args(argv)
 
     active = apply_cli_overrides(load_config(args.config), args)
-
     iq = read_cf32(args.file)
     shift_hz = args.tone_mid - args.center
+
+    afc_max = active["afc_max_hz"] if args.afc else 0.0
+    search_khz = (args.afc_search_khz if args.afc_search_khz is not None
+                  else afc_max / 1e3)
+    if not args.afc and args.afc_search_khz is None:
+        search_khz = 40.0  # harmless probe-only default when afc correction off
+
+    measured = None
+    if args.afc:
+        shifted = shift_to_virtual_center(iq, fs=args.rate, shift_hz=shift_hz)
+        measured = estimate_offset(shifted, fs=args.rate,
+                                   search_khz=search_khz)
+        if measured is not None:
+            print(f"tone-mid offset vs declared center: {measured:+.0f} Hz "
+                  f"(estimated actual center {args.center + shift_hz + measured:.0f} Hz)",
+                  file=sys.stderr)
+        else:
+            print("could not measure a tone-mid offset (no usable signal in "
+                  "this recording)", file=sys.stderr)
+
     records = decode_iq(iq, fs=args.rate, shift_hz=shift_hz,
+                        afc_max_hz=afc_max, afc_alpha=active["afc_alpha"],
+                        afc_search_khz=search_khz if afc_max > 0 else None,
                         sensor_id=active["sensor_id"],
                         max_wind_m_s=active["max_wind_m_s"],
                         dir_offset=active["dir_offset"])

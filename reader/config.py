@@ -29,6 +29,9 @@ DEFAULTS = {
     "sensor_id": "9fd70875",
     "max_wind_m_s": 60.0,
     "dir_offset": 0.0,
+    "afc_enable": True,
+    "afc_max_hz": 40000.0,
+    "afc_alpha": 0.2,
 }
 
 
@@ -90,4 +93,13 @@ def apply_cli_overrides(config, args):
     dir_offset = getattr(args, "dir_offset", None)
     if dir_offset is not None:
         config["dir_offset"] = _validate_offset(dir_offset)
+    afc_enable = getattr(args, "afc_enable", None)
+    if afc_enable is not None:
+        config["afc_enable"] = bool(afc_enable)
+    afc_max = getattr(args, "afc_max", None)
+    if afc_max is not None:
+        config["afc_max_hz"] = float(afc_max)
+    afc_alpha = getattr(args, "afc_alpha", None)
+    if afc_alpha is not None:
+        config["afc_alpha"] = float(afc_alpha)
     return config

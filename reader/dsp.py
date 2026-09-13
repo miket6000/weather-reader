@@ -34,6 +34,68 @@ def shift_to_virtual_center(iq, fs, shift_hz):
     return iq * np.exp(-1j * 2 * np.pi * shift_hz * t)
 
 
+def estimate_offset(iq, fs, tone_khz=60.0, search_khz=40.0, sym_us=121.5,
+                    lag=8, coher=0.30, min_tone_hits=4):
+    """Estimate the carrier offset of the two FSK tones relative to DC.
+
+    The station's two tones sit at +-tone_khz*kHz around a tone midpoint;
+    receiver-crystal and transmitter drift shift *both* tones equally. The
+    instantaneous frequency is measured per ~one-symbol hop (phase slope of a
+    delayed-conjugate product, which a short FSK burst's spectral smear cannot
+    corrupt), then the measured hops are split into the two tone groups by
+    sign. The midpoint of the two groups' medians is the carrier offset.
+
+    Hops are kept only when the hop's coherent gain r = |sum(prod)|/sum(|iq|^2)
+    exceeds `coher`: a CW tone integrates coherently (r ~ 0.5..1) while noise
+    hops stay near r ~ 0.06..0.2 no matter how loud, so weak bursts are found
+    and quiet/empty blocks yield None.
+    """
+    iq = np.asarray(iq)
+    n = len(iq)
+    if n < 4096:
+        return None
+    lag = max(1, int(lag))
+    hop = max(8, int(round(sym_us * 1e-6 * fs)))  # ~one symbol
+
+    iq64 = iq.astype(np.complex128)
+    prod = iq64[:-lag] * np.conj(iq64[lag:])      # phase advance per `lag`
+    power = np.abs(iq64[:-lag]) ** 2
+    nh = (len(prod)) // hop
+    if nh < 8:
+        return None
+    idx = np.arange(nh) * hop
+    sums = np.add.reduceat(prod[:nh * hop], idx)
+    pows = np.add.reduceat(power[:nh * hop], idx)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r = np.abs(sums) / pows
+    freqs = np.full(nh, np.nan)
+    hits = r > coher
+    if np.count_nonzero(hits) == 0:
+        return None
+    freqs[hits] = -np.angle(sums[hits]) * fs / (2.0 * np.pi * lag)
+
+    limit = (tone_khz + search_khz) * 1e3
+    inband = hits & (np.abs(freqs) <= limit) & ~np.isnan(freqs)
+    if np.count_nonzero(inband) < 2 * min_tone_hits:
+        return None
+    f = freqs[inband]
+    pos = f[f > 0]
+    neg = f[f < 0]
+    if pos.size < min_tone_hits or neg.size < min_tone_hits:
+        return None
+    med_pos = float(np.median(pos))
+    med_neg = float(np.median(neg))
+    # both groups must be tight clusters around the tones (rejects noise hops)
+    for group in (pos, neg):
+        if np.std(group) > 0.4 * tone_khz * 1e3:
+            return None
+    cand = 0.5 * (med_pos + med_neg)
+    if abs(cand) > search_khz * 1e3:
+        return None
+    return cand
+
+
 def soft_metric(iq, cfg, win=None):
     """Two-tone correlator soft metric in [-1, 1]; positive == tone1 ('1').
 

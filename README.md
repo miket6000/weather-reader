@@ -47,6 +47,10 @@ is `null` on rain frames (radiates rtl_433's `DATA_COND, !rain_ok`).
 
 prints two frames (wind + rain), including temperature 12.2 C and humidity 56 %.
 
+To see the residual tone-mid drift of a recording (how far the signal sits
+from `-T`), add `--afc`; it prints the measured offset and applies it while
+decoding.
+
 ## Run live
 
     # 1. decode worker -> log/ and stdout
@@ -84,6 +88,9 @@ and `cli.py` read:
         "max_wind_m_s": 60.0,
         "dir_offset": 0.0,
         "http_port": 8080,
+        "afc_enable": true,
+        "afc_max_hz": 40000.0,
+        "afc_alpha": 0.2,
         "chart_min_spread": { "temperature": 5, "humidity": 20, "wind": 2, "rain": 0 }
     }
 
@@ -112,6 +119,22 @@ and `cli.py` read:
   applies to temperature only. Example: temperature hovering between 15.0 and
   15.5 °C will still be charted across ~12.5-18 °C, giving stable, readable
   axes instead of zooming in on tiny fluctuations.
+
+- `afc_enable` — toggle automatic frequency correction on/off (default `true`).
+  RTL-SDR crystals and the transmitter oscillator both drift with temperature;
+  when the combined drift lands on a soft-metric boxcar null (~k·9 kHz) the
+  correlator loses frames even with strong SNR. AFC tracks the drift in real
+  time and keeps the two tones at ±60 kHz so the boxcar always sees the peak.
+- `afc_max_hz` — maximum correction the loop will apply, in Hz (default
+  40000). At 917 MHz this equals ~±44 ppm, comfortably covering typical
+  crystal drift. Reduce if AFC is seen chasing spurious signals.
+- `afc_alpha` — exponential smoothing factor for the running AFC estimate
+  (default 0.2). Values 0.1–0.5 are sensible; higher values track faster
+  drift but are noisier on weak bursts.
+
+`live.py` accepts `--no-afc`, `--afc-max HZ`, and `--afc-alpha A` to override
+these at run time. The CLI also offers `--afc` for an offline residual probe
+before decoding.
 
 Precedence is CLI flag > config file > built-in default. `live.py` and
 `cli.py` accept `--sensor-id` (empty string = accept any), `--max-wind`,

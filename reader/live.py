@@ -23,7 +23,13 @@ from datetime import datetime
 import numpy as np
 
 from .config import apply_cli_overrides, load_config
-from .dsp import Cfg, find_bursts, soft_metric
+from .dsp import (
+    Cfg,
+    estimate_offset,
+    find_bursts,
+    shift_to_virtual_center,
+    soft_metric,
+)
 from .pipeline import _records_for, decode_burst
 
 STOP = False
@@ -66,12 +72,20 @@ def run(args):
     sensor_id = active["sensor_id"]
     max_wind = active["max_wind_m_s"]
     dir_offset = active["dir_offset"]
+    afc_enable = active["afc_enable"]
+    afc_max = active["afc_max_hz"]
+    afc_alpha = active["afc_alpha"]
     mode = ("all sensors" if not sensor_id else f"sensor id {sensor_id}")
     print(f"[live] config: {mode}, max wind {max_wind} m/s, "
-          f"dir offset {dir_offset} deg", file=sys.stderr, flush=True)
+          f"dir offset {dir_offset} deg, afc {'on' if afc_enable else 'off'} "
+          f"<={afc_max:.0f} Hz", file=sys.stderr, flush=True)
 
     log = None if args.no_log else _open_log(args.directory)
     recent = {}  # (id, msg_hex, polarity, sync_bit) -> timestamp
+
+    afc = 0.0
+    last_afc_log = time.time()
+    sig_since = time.time()
 
     proc = None
     carry = None
@@ -87,9 +101,27 @@ def run(args):
             time.sleep(2)
             continue
         new = u8_to_complex(raw)
-        win = new if carry is None else np.concatenate([carry, new])
+
+        # Automatic frequency correction: measure the tone-pair offset on the
+        # raw block (before any correction), smooth it, and shift the window
+        # so the two tones sit back at +-tone_khz (crystal drift moves both
+        # tones equally, so one correction cancels receiver + transmitter drift).
+        meas = None
+        if afc_enable:
+            meas = estimate_offset(new, fs, tone_khz=args.tone_khz,
+                                   search_khz=afc_max / 1e3)
+            if meas is not None:
+                prev = afc
+                afc += afc_alpha * (max(-afc_max, min(afc_max, meas)) - afc)
+                if abs(afc - prev) > 50.0:
+                    print(f"[live] afc {prev:+.0f} -> {afc:+.0f} Hz",
+                          file=sys.stderr, flush=True)
+
+        raw_win = new if carry is None else np.concatenate([carry, new])
+        win = shift_to_virtual_center(raw_win, fs, afc)
         soft, energy = soft_metric(win, cfg)
         bursts = find_bursts(soft, energy, fs)
+        decoded = 0
         for (s0, s1) in bursts:
             cands = decode_burst(soft[s0:s1], fs)
             for rec in _records_for(cands, s0 / fs, fs, max_wind_m_s=max_wind,
@@ -111,13 +143,33 @@ def run(args):
                     for k in list(recent):
                         if now - recent[k] > args.dedupe_s:
                             del recent[k]
+                decoded += 1
                 line = json.dumps(rec)
                 print(line, flush=True)
                 if log:
                     log.write(line + "\n")
                     log.flush()
+
+        # Per-block housekeeping: afc drift watchdog log + no-decode health note.
+        now = time.time()
+        if afc_enable and now - last_afc_log >= 300.0:
+            print(f"[live] afc {afc:+.0f} Hz", file=sys.stderr, flush=True)
+            last_afc_log = now
+        if decoded:
+            sig_since = now
+        elif now - sig_since > 60.0:
+            if bursts or meas is not None:
+                print(f"[live] signal present but no valid frames for "
+                      f"{int(now - sig_since)} s (drift beyond afc range, "
+                      f"sensor issue, or interference?)", file=sys.stderr,
+                      flush=True)
+            else:
+                print(f"[live] no signal for {int(now - sig_since)} s "
+                      f"(sensor silent or dongle problem?)",
+                      file=sys.stderr, flush=True)
+            sig_since = now
         if carry is None or len(win) >= overlap:
-            carry = win[-overlap:]
+            carry = raw_win[-overlap:]
     if log:
         log.close()
     if proc:
@@ -149,6 +201,16 @@ def main(argv=None):
     ap.add_argument("--dir-offset", type=float, default=None,
                     help="wind-direction correction in degrees, -360..+360 "
                          "(default from config)")
+    ap.add_argument("--no-afc", dest="afc_enable", action="store_false",
+                    default=None,
+                    help="disable automatic frequency correction (config "
+                         "default is on)")
+    ap.add_argument("--afc-max", type=float, default=None,
+                    help="max tone-mid offset to track in Hz (config default "
+                         "40000)")
+    ap.add_argument("--afc-alpha", type=float, default=None,
+                    help="AFC smoothing factor 0..1 (config default 0.2; "
+                         "1 = instant)")
     return run(ap.parse_args(argv))
 
 
