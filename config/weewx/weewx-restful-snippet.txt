@@ -1,0 +1,36 @@
+76-
+77-##############################################################################
+78-
+79-#   This section is for uploading data to Internet sites
+80-
+81:[StdRESTful]
+82-    
+83-    # Uncomment and change to override logging for uploading services.
+84-    # log_success = True
+85-    # log_failure = True
+86-    
+87-    [[StationRegistry]]
+88-        # To register this weather station at weewx.com, set this to true, and
+89-        # set option 'station_url', located in the [Station] section above.
+90-        register_this_station = False
+91-    
+92-    [[AWEKAS]]
+93-        # This section is for configuring posts to AWEKAS.
+94-        
+95-        # If you wish to post to AWEKAS, set the option 'enable' to true, then
+96-        # specify a username and password.
+97-        # Use quotes around the password to guard against parsing errors.
+98-        enable = false
+99-        username = replace_me
+100-        password = replace_me
+101-    
+102-    [[CWOP]]
+103-        # This section is for configuring posts to CWOP.
+104-        
+105-        # If you wish to post to CWOP, set the option 'enable' to true,
+106-        # then specify the station ID (e.g., CW1234).
+107-        enable = false
+108-        station = replace_me
+109-        # If this is an APRS (radio amateur) station, specify the
+110-        # passcode (e.g., 12345). Otherwise, ignore.
+111-        passcode = replace_me

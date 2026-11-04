@@ -1,0 +1,17 @@
+641-        process_services = weewx.engine.StdConvert, weewx.engine.StdCalibrate, weewx.engine.StdQC, weewx.wxservices.StdWXCalculate
+642-        xtype_services = weewx.wxxtypes.StdWXXTypes, weewx.wxxtypes.StdPressureCooker, weewx.wxxtypes.StdRainRater, weewx.wxxtypes.StdDelta
+643-        archive_services = weewx.engine.StdArchive
+644-        restful_services = weewx.restx.StdStationRegistry, weewx.restx.StdWunderground, weewx.restx.StdPWSweather, weewx.restx.StdCWOP, weewx.restx.StdWOW, weewx.restx.StdWOWBE, weewx.restx.StdAWEKAS
+645-        report_services = weewx.engine.StdPrint, weewx.engine.StdReport
+646:[Bresser6in1]
+647-    driver = user.bresser6in1
+648-    sensor_id = 9fd70875
+649-    max_wind_m_s = 60.0
+650-    dir_offset = 0.0
+651-    wind_mps_per_count = 0.1
+652-    rain_mm_per_count = 0.04
+653-    center = 916850000
+654-    gain = 30.0
+655-    afc_enable = True
+656-    afc_max_hz = 40000.0
+657-    afc_alpha = 0.2
